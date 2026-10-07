@@ -805,9 +805,34 @@ extern "C" void DRV_IR_RunFrame() {
 				int repeat = results.repeat?0:1; // not sure how to deal with this
 
 				if (results.decode_type == decode_type_t::UNKNOWN) {
-					//snprintf(out, sizeof(out), "IR_RAW 0x%lX %d", (unsigned long)results.decodedRawData, repeat);
-					snprintf(out, sizeof(out), "IR %s %s", "Unknown", lastIrReceived.c_str());
-					ADDLOG_INFO(LOG_FEATURE_IR, (char *)out);
+				    snprintf(out, sizeof(out), "IR %s %s", "Unknown", lastIrReceived.c_str());
+				    ADDLOG_INFO(LOG_FEATURE_IR, (char *)out);
+				
+				    ADDLOG_INFO(LOG_FEATURE_IR, "RAW BEGIN count=%u",
+				        (unsigned)(results.rawlen - 1));
+				
+				    for (uint16_t base = 1; base < results.rawlen; base += 10) {
+				        char line[128];
+				        int pos = snprintf(line, sizeof(line), "RAW %u:",
+				            (unsigned)(base - 1));
+				
+				        for (uint16_t i = base;
+				             i < results.rawlen && i < base + 10;
+				             i++) {
+				            uint32_t usecs = results.rawbuf[i] * kRawTick;
+				
+				            pos += snprintf(
+				                line + pos,
+				                sizeof(line) - pos,
+				                " %lu",
+				                (unsigned long)usecs
+				            );
+				        }
+				
+				        ADDLOG_INFO(LOG_FEATURE_IR, "%s", line);
+				    }
+				
+				    ADDLOG_INFO(LOG_FEATURE_IR, "RAW END");
 				}
 				else if (!hasACState(results.decode_type)) {
 					snprintf(out, sizeof(out), "IR %s %lX %lX %d", proto_name.c_str(), (long int)results.address, (long int)results.command, repeat);
