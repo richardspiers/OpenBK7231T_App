@@ -489,6 +489,111 @@ extern "C" commandResult_t IR_Send_Cmd(const void *context, const char *cmd, con
 	return CMD_RES_ERROR;
 }
 
+// BC-4002NEW.PCB ceiling fan remote.
+//
+// 12-bit MSB-first pulse-width protocol:
+//   1 = ~1600us mark + ~560us space
+//   0 = ~560us mark  + ~1600us space
+//
+// The remote repeats the command frame while the key is pressed and then
+// emits 0xD80 as a release/idle frame. The gap below is additional silence
+// after the final bit; together with that bit's normal space it reproduces
+// the ~9.1ms / ~10.1ms inter-frame gaps observed from the original remote.
+//
+// Captured button codes:
+//   POWER = 0xD90
+//   HIGH  = 0xD88
+//   MED   = 0xDC6
+//   LOW   = 0xDC3
+//   OFF   = 0xDA0
+//   LAMP  = 0xD81
+//   RELEASE/IDLE = 0xD80
+extern "C" commandResult_t IR_Fan_Cmd(const void *context, const char *cmd, const char *args_in, int cmdFlags) {
+	if (!args_in || !args_in[0]) {
+		ADDLOG_ERROR(LOG_FEATURE_IR, (char *)"IRFan expects POWER/HIGH/MED/LOW/OFF/LAMP or a 12-bit hex code");
+		return CMD_RES_NOT_ENOUGH_ARGUMENTS;
+	}
+
+	if (!pIRsend) {
+		ADDLOG_ERROR(LOG_FEATURE_IR, (char *)"IRFan: IR transmitter is not configured");
+		return CMD_RES_ERROR;
+	}
+
+	uint16_t code = 0;
+
+	if ((!my_strnicmp(args_in, "POWER", 5) && args_in[5] == 0) ||
+		(!my_strnicmp(args_in, "PWR", 3) && args_in[3] == 0)) {
+		code = 0xD90;
+	}
+	else if ((!my_strnicmp(args_in, "HIGH", 4) && args_in[4] == 0) ||
+		(!my_strnicmp(args_in, "HI", 2) && args_in[2] == 0)) {
+		code = 0xD88;
+	}
+	else if ((!my_strnicmp(args_in, "MEDIUM", 6) && args_in[6] == 0) ||
+		(!my_strnicmp(args_in, "MED", 3) && args_in[3] == 0)) {
+		code = 0xDC6;
+	}
+	else if (!my_strnicmp(args_in, "LOW", 3) && args_in[3] == 0) {
+		code = 0xDC3;
+	}
+	else if (!my_strnicmp(args_in, "OFF", 3) && args_in[3] == 0) {
+		code = 0xDA0;
+	}
+	else if (!my_strnicmp(args_in, "LAMP", 4) && args_in[4] == 0) {
+		code = 0xD81;
+	}
+	else {
+		char *end = NULL;
+		unsigned long value = strtoul(args_in, &end, 16);
+
+		if (end == args_in || *end != 0 || value > 0xFFF) {
+			ADDLOG_ERROR(LOG_FEATURE_IR, (char *)"IRFan invalid command/code: %s", args_in);
+			return CMD_RES_BAD_ARGUMENT;
+		}
+
+		code = (uint16_t)value;
+	}
+
+	const uint16_t oneMark = 1600;
+	const uint32_t oneSpace = 560;
+	const uint16_t zeroMark = 560;
+	const uint32_t zeroSpace = 1600;
+	const uint32_t frameGap = 8500;
+	const uint16_t bits = 12;
+	const uint16_t frequency = 38000;
+	const uint8_t duty = 50;
+
+	// repeat=4 means one initial transmission plus four repeats: five frames.
+	pIRsend->sendGeneric(
+		0, 0,
+		oneMark, oneSpace,
+		zeroMark, zeroSpace,
+		0, frameGap,
+		code, bits,
+		frequency,
+		true,
+		4,
+		duty);
+
+	// Emulate releasing the physical key with two idle/release frames.
+	pIRsend->sendGeneric(
+		0, 0,
+		oneMark, oneSpace,
+		zeroMark, zeroSpace,
+		0, frameGap,
+		0xD80, bits,
+		frequency,
+		true,
+		1,
+		duty);
+
+	// Queue 100ms of silence after the virtual key press.
+	pIRsend->delay(100);
+
+	ADDLOG_INFO(LOG_FEATURE_IR, (char *)"IRFan sent 0x%03X", (unsigned)code);
+	return CMD_RES_OK;
+}
+
 extern "C" commandResult_t IR_Enable(const void *context, const char *cmd, const char *args_in, int cmdFlags) {
 	if (!args_in || !args_in[0]) {
 		ADDLOG_ERROR(LOG_FEATURE_IR, (char *)"IREnable expects arguments");
@@ -707,6 +812,7 @@ extern "C" void DRV_IR_Init() {
 			//cmddetail:"fn":"IR_Send_Cmd","file":"driver/drv_ir_new.cpp","requires":"ENABLE_DRIVER_IRREMOTEESP (IRremoteESP8266)",
 			//cmddetail:"examples":""}
 			CMD_RegisterCommand("IRSend", IR_Send_Cmd, NULL);
+			CMD_RegisterCommand("IRFan", IR_Fan_Cmd, NULL);
 			//cmddetail:{"name":"IRAC","args":"[TODO]",
 			//cmddetail:"descr":"Sends IR commands for HVAC control (TODO)",
 			//cmddetail:"fn":"IR_AC_Cmd","file":"driver/drv_ir_new.cpp","requires":"ENABLE_DRIVER_IRREMOTEESP (IRremoteESP8266)",
@@ -805,34 +911,8 @@ extern "C" void DRV_IR_RunFrame() {
 				int repeat = results.repeat?0:1; // not sure how to deal with this
 
 				if (results.decode_type == decode_type_t::UNKNOWN) {
-				    snprintf(out, sizeof(out), "IR %s %s", "Unknown", lastIrReceived.c_str());
-				    ADDLOG_INFO(LOG_FEATURE_IR, (char *)out);
-				
-				    ADDLOG_INFO(LOG_FEATURE_IR, "RAW BEGIN count=%u",
-				        (unsigned)(results.rawlen - 1));
-				
-				    for (uint16_t base = 1; base < results.rawlen; base += 10) {
-				        char line[128];
-				        int pos = snprintf(line, sizeof(line), "RAW %u:",
-				            (unsigned)(base - 1));
-				
-				        for (uint16_t i = base;
-				             i < results.rawlen && i < base + 10;
-				             i++) {
-				            uint32_t usecs = results.rawbuf[i] * kRawTick;
-				
-				            pos += snprintf(
-				                line + pos,
-				                sizeof(line) - pos,
-				                " %lu",
-				                (unsigned long)usecs
-				            );
-				        }
-				
-				        ADDLOG_INFO(LOG_FEATURE_IR, "%s", line);
-				    }
-				
-				    ADDLOG_INFO(LOG_FEATURE_IR, "RAW END");
+					snprintf(out, sizeof(out), "IR %s %s", "Unknown", lastIrReceived.c_str());
+					ADDLOG_INFO(LOG_FEATURE_IR, (char *)out);
 				}
 				else if (!hasACState(results.decode_type)) {
 					snprintf(out, sizeof(out), "IR %s %lX %lX %d", proto_name.c_str(), (long int)results.address, (long int)results.command, repeat);
