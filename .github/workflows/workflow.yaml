@@ -1,4 +1,4 @@
-name: Build BK7231T IRremoteESP
+name: Build BK7231N IRremoteESP
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build:
-    name: Build BK7231T IRremoteESP
+    name: Build BK7231N IRremoteESP
     runs-on: ubuntu-22.04
     timeout-minutes: 30
 
@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          make VARIANT=irRemoteESP OpenBK7231T
+          make VARIANT=irRemoteESP OpenBK7231N
 
       - name: Verify and prepare OTA firmware
         shell: bash
@@ -33,11 +33,11 @@ jobs:
           set -euo pipefail
 
           mapfile -t files < <(
-            find output -type f -name 'OpenBK7231T_*.rbl' -print
+            find output -type f -name 'OpenBK7231N_*.rbl' -print
           )
 
           if [ "${#files[@]}" -ne 1 ]; then
-            echo "Expected exactly one BK7231T .rbl file."
+            echo "Expected exactly one BK7231N .rbl file."
             echo "Found: ${#files[@]}"
             printf '%s\n' "${files[@]}"
             exit 1
@@ -45,21 +45,21 @@ jobs:
 
           mkdir -p artifact
 
-          cp "${files[0]}" artifact/OpenBK7231T_irRemoteESP.rbl
+          cp "${files[0]}" artifact/OpenBK7231N_irRemoteESP.rbl
 
           {
             echo "Source repository: $GITHUB_REPOSITORY"
             echo "Source commit:     $GITHUB_SHA"
             echo
             echo "Firmware SHA256:"
-            sha256sum artifact/OpenBK7231T_irRemoteESP.rbl
+            sha256sum artifact/OpenBK7231N_irRemoteESP.rbl
           } | tee artifact/build-info.txt
 
       - name: Upload OTA firmware
         # actions/upload-artifact v6.0.0, pinned to exact commit
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: OpenBK7231T-irRemoteESP
+          name: OpenBK7231N-irRemoteESP
           path: artifact/
           if-no-files-found: error
           retention-days: 7
